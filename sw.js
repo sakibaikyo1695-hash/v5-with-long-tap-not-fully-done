@@ -1,9 +1,10 @@
-// Offline support for app shell + any map tiles you view while online.
+// Offline support for app shell + map tiles (normal + satellite)
 // Tiles you looked at preflight remain available in the air.
 
-const VERSION = 'v1';
+const VERSION = 'v2';
 const APP_CACHE = `app-${VERSION}`;
 const TILE_CACHE = `tiles-${VERSION}`;
+const SATELLITE_CACHE = `satellite-${VERSION}`;
 const APP_ASSETS = [
   './',
   './index.html',
@@ -11,8 +12,9 @@ const APP_ASSETS = [
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
 ];
 
-// keep tile cache from growing forever
+// Keep tile caches from growing forever
 const MAX_TILE_ENTRIES = 2000;
+const MAX_SATELLITE_ENTRIES = 800; // Smaller because satellite tiles are larger
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -25,7 +27,9 @@ self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const keys = await caches.keys();
     await Promise.all(keys.map(k => {
-      if (k !== APP_CACHE && k !== TILE_CACHE) return caches.delete(k);
+      if (k !== APP_CACHE && k !== TILE_CACHE && k !== SATELLITE_CACHE) {
+        return caches.delete(k);
+      }
     }));
     if ('navigationPreload' in self.registration) {
       try { await self.registration.navigationPreload.enable(); } catch {}
@@ -71,7 +75,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // OSM tiles user views (cache-as-you-go)
+  // OSM tiles (normal map)
   const isOSMTile = /https:\/\/[abc]\.tile\.openstreetmap\.org\/\d+\/\d+\/\d+\.png/.test(req.url);
   if (isOSMTile) {
     event.respondWith((async () => {
@@ -84,7 +88,25 @@ self.addEventListener('fetch', (event) => {
         trimCache(cache, MAX_TILE_ENTRIES);
         return net;
       } catch {
-        // no tile cached: nothing to show; return generic error
+        return Response.error();
+      }
+    })());
+    return;
+  }
+
+  // Esri Satellite tiles
+  const isSatelliteTile = /https:\/\/server\.arcgisonline\.com\/ArcGIS\/rest\/services\/World_Imagery\/MapServer\/tile\/\d+\/\d+\/\d+/.test(req.url);
+  if (isSatelliteTile) {
+    event.respondWith((async () => {
+      const cache = await caches.open(SATELLITE_CACHE);
+      const cached = await cache.match(req);
+      if (cached) return cached;
+      try {
+        const net = await fetch(req, { mode: 'cors', credentials: 'omit' });
+        await cache.put(req, net.clone());
+        trimCache(cache, MAX_SATELLITE_ENTRIES);
+        return net;
+      } catch {
         return Response.error();
       }
     })());
